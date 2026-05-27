@@ -73,10 +73,13 @@ function loadProjects(): { projects: ProjectConfig[]; multi: boolean } {
 
 const { projects, multi } = loadProjects();
 
+const expertMode = (process.env.MCP_EXPERT_MODE ?? "").toLowerCase() === "true";
+
 export const config = {
   transport,
   projects,
   multiProject: multi,
+  expertMode,
   // HTTP-only knobs. Required only when MCP_TRANSPORT=http.
   mcpAuthToken: transport === "http" ? required("MCP_AUTH_TOKEN") : "",
   port: Number(process.env.MCP_PORT ?? 3000),

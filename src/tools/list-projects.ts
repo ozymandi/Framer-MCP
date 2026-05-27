@@ -7,16 +7,15 @@ export function registerListProjects(server: McpServer): void {
     "framer_list_projects",
     {
       description:
-        "List the Framer projects this server is configured to access. " +
-        "Returns an array of { alias, mode } where `alias` is the value you pass " +
-        "as the `project` argument on other tools. In single-project mode you'll " +
-        "see one entry with alias 'default' and the `project` argument is optional. " +
-        "In multi-project mode the `project` argument is required on every other tool.",
+        "List the Framer projects this server is configured to access. Returns an array of " +
+        "{ alias }. In single-project mode, `project` is optional on other tools. In " +
+        "multi-project mode it is required. Also reports the active toolMode (simple | expert).",
       inputSchema: {},
     },
     async () => {
       return jsonResult({
-        mode: config.multiProject ? "multi" : "single",
+        projectMode: config.multiProject ? "multi" : "single",
+        toolMode: config.expertMode ? "expert" : "simple",
         projects: config.projects.map((p) => ({ alias: p.alias })),
       });
     },

@@ -13,7 +13,8 @@ generator; this server is the writer.
 
 - One Framer project per server instance, configured via env.
 - HTTP transport (streamable HTTP), Bearer auth.
-- Fourteen tools, all designed for small-model usability:
+- Fifteen always-on tools, designed for small-model usability:
+  - `framer_list_projects`
   - `framer_status`
   - `framer_list_collections`
   - `framer_describe_collection`
@@ -28,6 +29,14 @@ generator; this server is the writer.
   - `framer_remove_fields`
   - `framer_add_enum_cases`
   - `framer_publish_and_deploy`
+- Seven expert-only tools (opt-in via `MCP_EXPERT_MODE=true`):
+  - `framer_get_changed_paths`
+  - `framer_list_deployments`
+  - `framer_list_redirects`
+  - `framer_add_redirects`
+  - `framer_remove_redirects`
+  - `framer_reorder_items`
+  - `framer_reorder_fields`
 - Operates on existing user-created collections. No schema editing in v1.
 - All identifiers (collection ids, field ids) hidden from the client. The
   client uses collection names, field names, slugs. Server maps internally.
