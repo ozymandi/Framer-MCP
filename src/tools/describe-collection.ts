@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getFramer } from "../framer-client.js";
-import { refreshAll } from "../schema-cache.js";
+import { getCollectionById, refreshAll } from "../schema-cache.js";
 import { errorResult, jsonResult, resolveCollection } from "./helpers.js";
 
 const WRITABLE_TYPES = new Set([
@@ -15,6 +15,8 @@ const WRITABLE_TYPES = new Set([
   "enum",
   "image",
   "file",
+  "collectionReference",
+  "multiCollectionReference",
 ]);
 
 export function registerDescribeCollection(server: McpServer): void {
@@ -46,14 +48,24 @@ export function registerDescribeCollection(server: McpServer): void {
         .filter((f) => f.type !== "divider")
         .map((f) => {
           const writable = WRITABLE_TYPES.has(f.type);
-          return {
+          const base: Record<string, unknown> = {
             name: f.name,
             key: f.key,
             type: f.type,
             required: f.required,
             recommended: writable,
-            ...(f.enumCases ? { enumCases: [...f.enumCases.values()].map((e) => e.name) } : {}),
           };
+          if (f.enumCases) {
+            base["enumCases"] = [...f.enumCases.values()].map((e) => e.name);
+          }
+          if (
+            (f.type === "collectionReference" || f.type === "multiCollectionReference") &&
+            f.referenceTargetCollectionId
+          ) {
+            const target = getCollectionById(f.referenceTargetCollectionId);
+            if (target) base["referenceCollection"] = target.name;
+          }
+          return base;
         });
 
       return jsonResult({
@@ -65,7 +77,10 @@ export function registerDescribeCollection(server: McpServer): void {
           "skip a field just because it is not required. " +
           "When writing, you may use EITHER the human-readable `name` (e.g. \"Author Name\") OR " +
           "the snake_case `key` (e.g. \"author_name\") as the field key in the `fields` object — " +
-          "the server matches both, case-insensitively, ignoring spaces/dashes/underscores.",
+          "the server matches both, case-insensitively, ignoring spaces/dashes/underscores. " +
+          "For collectionReference fields, pass the SLUG of the target item (string). For " +
+          "multiCollectionReference, pass an ARRAY of slugs. Call framer_list_items on the " +
+          "`referenceCollection` first to see which slugs are available.",
         name: c.name,
         writable: c.managedBy !== "anotherPlugin",
         fields,

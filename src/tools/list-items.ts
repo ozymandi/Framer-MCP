@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getFramer } from "../framer-client.js";
 import { refreshAll } from "../schema-cache.js";
-import { decodeFieldData } from "../field-encoder.js";
+import { decodeFieldData, newEncodeCaches } from "../field-encoder.js";
 import { errorResult, jsonResult, resolveCollection } from "./helpers.js";
 
 export function registerListItems(server: McpServer): void {
@@ -46,14 +46,20 @@ export function registerListItems(server: McpServer): void {
       const end = start + (limit ?? 50);
       const slice = all.slice(start, end);
 
-      const out = slice.map((item) => ({
-        slug: item.slug,
-        draft: item.draft,
-        fields: decodeFieldData(
-          cached,
-          item.fieldData as Record<string, { type: string; value: unknown } | undefined>,
-        ),
-      }));
+      const caches = newEncodeCaches();
+      const out: { slug: string; draft: boolean; fields: Record<string, unknown> }[] = [];
+      for (const item of slice) {
+        out.push({
+          slug: item.slug,
+          draft: item.draft,
+          fields: await decodeFieldData(
+            framer,
+            cached,
+            item.fieldData as Record<string, { type: string; value: unknown } | undefined>,
+            caches,
+          ),
+        });
+      }
 
       return jsonResult({
         total: all.length,

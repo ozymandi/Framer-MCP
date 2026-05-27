@@ -32,6 +32,9 @@ export interface CachedField {
   required: boolean;
   /** Only for type === "enum". Normalized case-name → case. */
   enumCases?: Map<string, CachedEnumCase>;
+  /** Only for type === "collectionReference" / "multiCollectionReference":
+   * the ID of the collection this field points at. */
+  referenceTargetCollectionId?: string;
 }
 
 export interface CachedCollection {
@@ -47,6 +50,7 @@ export interface CachedCollection {
 }
 
 const collectionsByName = new Map<string, CachedCollection>();
+const collectionsById = new Map<string, CachedCollection>();
 
 /**
  * Normalize a user-supplied identifier so we can match leniently.
@@ -71,6 +75,7 @@ export function toSnakeCase(input: string): string {
 
 export function clearCache(): void {
   collectionsByName.clear();
+  collectionsById.clear();
 }
 
 export async function refreshAll(framer: Framer): Promise<void> {
@@ -80,6 +85,7 @@ export async function refreshAll(framer: Framer): Promise<void> {
     const fields = await collection.getFields();
     const cached = buildCachedCollection(collection, fields);
     collectionsByName.set(normalizeKey(cached.name), cached);
+    collectionsById.set(cached.id, cached);
   }
 }
 
@@ -91,6 +97,7 @@ function buildCachedCollection(
     type: string;
     required?: boolean;
     cases?: ReadonlyArray<{ id: string; name: string }>;
+    collectionId?: string;
   }>,
 ): CachedCollection {
   const fieldsByName = new Map<string, CachedField>();
@@ -109,6 +116,12 @@ function buildCachedCollection(
       const map = new Map<string, CachedEnumCase>();
       for (const c of raw.cases) map.set(normalizeKey(c.name), { id: c.id, name: c.name });
       cached.enumCases = map;
+    }
+    if (
+      (raw.type === "collectionReference" || raw.type === "multiCollectionReference") &&
+      typeof raw.collectionId === "string"
+    ) {
+      cached.referenceTargetCollectionId = raw.collectionId;
     }
     // Index by both the display name and the snake_case key so either form
     // resolves to the same field.
@@ -130,6 +143,10 @@ function buildCachedCollection(
 
 export function getCollectionByName(name: string): CachedCollection | undefined {
   return collectionsByName.get(normalizeKey(name));
+}
+
+export function getCollectionById(id: string): CachedCollection | undefined {
+  return collectionsById.get(id);
 }
 
 export function listCollections(): CachedCollection[] {

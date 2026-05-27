@@ -3,15 +3,31 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CollectionItemInput } from "framer-api";
 import { getFramer } from "../framer-client.js";
 import { refreshAll } from "../schema-cache.js";
-import { encodeFieldData, FieldEncodeError, type PlainFieldValue } from "../field-encoder.js";
-import { newAssetCache } from "../asset-uploader.js";
+import {
+  encodeFieldData,
+  FieldEncodeError,
+  newEncodeCaches,
+  type PlainFieldValue,
+} from "../field-encoder.js";
 import { errorResult, jsonResult, resolveCollection } from "./helpers.js";
+
+const fieldValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.array(z.string()),
+]);
 
 const itemSchema = z.object({
   slug: z.string().min(1).describe("Slug of the item to update."),
   fields: z
-    .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
-    .describe("Only the fields you want to change. Other fields stay untouched."),
+    .record(fieldValueSchema)
+    .describe(
+      "Only the fields you want to change. Other fields stay untouched. " +
+        "For collectionReference fields, pass a slug (string). For multiCollectionReference, " +
+        "an array of slugs.",
+    ),
 });
 
 export function registerUpdateItems(server: McpServer): void {
@@ -49,7 +65,7 @@ export function registerUpdateItems(server: McpServer): void {
         fieldData: Record<string, { type: string; value: unknown }>;
       }[] = [];
 
-      const cache = newAssetCache();
+      const caches = newEncodeCaches();
       try {
         for (const it of items) {
           const id = idBySlug.get(it.slug);
@@ -61,7 +77,7 @@ export function registerUpdateItems(server: McpServer): void {
             framer,
             cached,
             it.fields as Record<string, PlainFieldValue>,
-            cache,
+            caches,
           );
           toUpsert.push({ id, slug: it.slug, fieldData });
         }

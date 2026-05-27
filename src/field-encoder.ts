@@ -1,5 +1,5 @@
 import type { CachedCollection, CachedField } from "./schema-cache.js";
-import { normalizeKey, suggestName } from "./schema-cache.js";
+import { getCollectionById, normalizeKey, suggestName } from "./schema-cache.js";
 import type { Framer } from "./framer-client.js";
 import {
   AssetUploadError,
@@ -7,12 +7,22 @@ import {
   resolveAssetValue,
   type AssetCache,
 } from "./asset-uploader.js";
+import {
+  newReferenceCache,
+  lookupSlugById,
+  ReferenceResolveError,
+  resolveMany,
+  resolveOne,
+  type ReferenceCache,
+} from "./reference-resolver.js";
 
 /**
  * Plain JSON value the client may send for a field.
  * Server wraps it into Framer's typed FieldDataEntry shape.
+ *
+ * `string[]` is accepted only for multiCollectionReference (array of slugs).
  */
-export type PlainFieldValue = string | number | boolean | null;
+export type PlainFieldValue = string | number | boolean | null | string[];
 
 export class FieldEncodeError extends Error {
   constructor(message: string) {
@@ -33,28 +43,41 @@ const WRITABLE: ReadonlyArray<CachedField["type"]> = [
   "enum",
   "image",
   "file",
+  "collectionReference",
+  "multiCollectionReference",
 ];
+
+export interface EncodeCaches {
+  assets: AssetCache;
+  references: ReferenceCache;
+}
+
+export function newEncodeCaches(): EncodeCaches {
+  return { assets: newAssetCache(), references: newReferenceCache() };
+}
 
 /**
  * Convert `{ fieldName: plainValue }` into Framer's
  * `{ [fieldId]: { type, value } }` form.
  *
- * Image/file fields automatically upload from URLs and data URLs.
+ * - Image/file fields auto-upload URLs and data URLs.
+ * - Reference fields auto-resolve slugs to item ids.
  *
- * Throws FieldEncodeError or AssetUploadError with model-friendly messages.
+ * Throws FieldEncodeError, AssetUploadError, or ReferenceResolveError with
+ * model-friendly messages.
  */
 export async function encodeFieldData(
   framer: Framer,
   collection: CachedCollection,
   fields: Record<string, PlainFieldValue>,
-  cache: AssetCache = newAssetCache(),
-): Promise<Record<string, { type: string; value: unknown; alt?: string }>> {
-  const out: Record<string, { type: string; value: unknown; alt?: string }> = {};
+  caches: EncodeCaches = newEncodeCaches(),
+): Promise<Record<string, { type: string; value: unknown }>> {
+  const out: Record<string, { type: string; value: unknown }> = {};
 
   for (const [rawName, rawValue] of Object.entries(fields)) {
     const field = collection.fieldsByName.get(normalizeKey(rawName));
     if (!field) {
-      const known = [...collection.fieldsByName.values()].map((f) => f.name);
+      const known = [...new Set(collection.orderedFields.map((f) => f.name))];
       const hint = suggestName(rawName, known);
       throw new FieldEncodeError(
         `Collection '${collection.name}' has no field '${rawName}'.` +
@@ -67,7 +90,7 @@ export async function encodeFieldData(
           `Writable types: ${WRITABLE.join(", ")}.`,
       );
     }
-    out[field.id] = await encodeOne(framer, field, rawValue, cache);
+    out[field.id] = await encodeOne(framer, field, rawValue, caches);
   }
   return out;
 }
@@ -76,8 +99,8 @@ async function encodeOne(
   framer: Framer,
   field: CachedField,
   value: PlainFieldValue,
-  cache: AssetCache,
-): Promise<{ type: string; value: unknown; alt?: string }> {
+  caches: EncodeCaches,
+): Promise<{ type: string; value: unknown }> {
   if (value === null) {
     if (field.required) {
       throw new FieldEncodeError(
@@ -159,11 +182,50 @@ async function encodeOne(
         );
       }
       try {
-        const asset = await resolveAssetValue(framer, field.type, value, cache);
+        const asset = await resolveAssetValue(framer, field.type, value, caches.assets);
         return { type: field.type, value: asset.url };
       } catch (err) {
         if (err instanceof AssetUploadError) {
           throw new FieldEncodeError(`Field '${field.name}': ${err.message}`);
+        }
+        throw err;
+      }
+    }
+    case "collectionReference": {
+      if (typeof value !== "string") {
+        throw new FieldEncodeError(
+          `Field '${field.name}' (collectionReference) expects a single slug (string), got ${describe(value)}.`,
+        );
+      }
+      try {
+        const id = await resolveOne(framer, field, value, caches.references);
+        return { type: "collectionReference", value: id };
+      } catch (err) {
+        if (err instanceof ReferenceResolveError) {
+          throw new FieldEncodeError(err.message);
+        }
+        throw err;
+      }
+    }
+    case "multiCollectionReference": {
+      if (!Array.isArray(value)) {
+        throw new FieldEncodeError(
+          `Field '${field.name}' (multiCollectionReference) expects an array of slugs, got ${describe(value)}.`,
+        );
+      }
+      for (const v of value) {
+        if (typeof v !== "string") {
+          throw new FieldEncodeError(
+            `Field '${field.name}': every entry must be a slug string. Got ${describe(v)} in the array.`,
+          );
+        }
+      }
+      try {
+        const ids = await resolveMany(framer, field, value, caches.references);
+        return { type: "multiCollectionReference", value: ids };
+      } catch (err) {
+        if (err instanceof ReferenceResolveError) {
+          throw new FieldEncodeError(err.message);
         }
         throw err;
       }
@@ -183,23 +245,34 @@ function describe(v: unknown): string {
 
 /**
  * Decode Framer's stored FieldData back into a flat map of `fieldName → plainValue`.
+ *
+ * For reference fields, returns `{ slug, collection }` (or arrays thereof).
+ * Asynchronous because reference decoding requires a live lookup.
  */
-export function decodeFieldData(
+export async function decodeFieldData(
+  framer: Framer,
   collection: CachedCollection,
   fieldData: Record<string, { type: string; value: unknown } | undefined>,
-): Record<string, unknown> {
+  caches: EncodeCaches = newEncodeCaches(),
+): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   for (const field of collection.orderedFields) {
     if (field.type === "divider" || field.type === "unsupported") continue;
     const entry = fieldData[field.id];
-    out[field.name] = entry ? decodeEntry(field, entry) : null;
+    out[field.name] = entry ? await decodeEntry(framer, field, entry, caches) : null;
   }
   return out;
 }
 
-function decodeEntry(field: CachedField, entry: { type: string; value: unknown }): unknown {
+async function decodeEntry(
+  framer: Framer,
+  field: CachedField,
+  entry: { type: string; value: unknown },
+  caches: EncodeCaches,
+): Promise<unknown> {
   const v = entry.value;
   if (v === undefined || v === null) return null;
+
   switch (field.type) {
     case "enum": {
       if (typeof v !== "string") return null;
@@ -208,17 +281,35 @@ function decodeEntry(field: CachedField, entry: { type: string; value: unknown }
     }
     case "image":
     case "file": {
-      // Asset objects expose `url` and `id`. Expose `url` so the LLM can verify
-      // and `id` so it can be re-used in further writes.
       if (v && typeof v === "object") {
         const o = v as { id?: string; url?: string };
         return { id: o.id ?? null, url: o.url ?? null };
       }
       return v;
     }
-    case "collectionReference":
-    case "multiCollectionReference":
-      return v;
+    case "collectionReference": {
+      if (typeof v !== "string") return null;
+      const targetId = field.referenceTargetCollectionId;
+      if (!targetId) return v;
+      const slug = await lookupSlugById(framer, targetId, v, caches.references);
+      const collectionName = getCollectionById(targetId)?.name ?? null;
+      return slug ? { slug, collection: collectionName } : { itemId: v, collection: collectionName };
+    }
+    case "multiCollectionReference": {
+      const targetId = field.referenceTargetCollectionId;
+      if (!targetId || !Array.isArray(v)) return v;
+      const collectionName = getCollectionById(targetId)?.name ?? null;
+      const out: unknown[] = [];
+      for (const id of v) {
+        if (typeof id !== "string") {
+          out.push(id);
+          continue;
+        }
+        const slug = await lookupSlugById(framer, targetId, id, caches.references);
+        out.push(slug ? { slug, collection: collectionName } : { itemId: id, collection: collectionName });
+      }
+      return out;
+    }
     case "array":
       return Array.isArray(v) ? `[array of ${v.length}]` : v;
     default:

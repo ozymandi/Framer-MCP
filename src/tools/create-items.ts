@@ -3,8 +3,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CollectionItemInput } from "framer-api";
 import { getFramer } from "../framer-client.js";
 import { refreshAll } from "../schema-cache.js";
-import { encodeFieldData, FieldEncodeError, type PlainFieldValue } from "../field-encoder.js";
-import { newAssetCache } from "../asset-uploader.js";
+import {
+  encodeFieldData,
+  FieldEncodeError,
+  newEncodeCaches,
+  type PlainFieldValue,
+} from "../field-encoder.js";
 import { errorResult, jsonResult, resolveCollection } from "./helpers.js";
 
 const WRITABLE_TYPES = new Set([
@@ -18,6 +22,16 @@ const WRITABLE_TYPES = new Set([
   "enum",
   "image",
   "file",
+  "collectionReference",
+  "multiCollectionReference",
+]);
+
+const fieldValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.array(z.string()),
 ]);
 
 const itemSchema = z.object({
@@ -28,8 +42,12 @@ const itemSchema = z.object({
       "URL-safe unique identifier within the collection (e.g. 'getting-started').",
     ),
   fields: z
-    .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
-    .describe("Flat map of fieldName → primitive value. Call framer_describe_collection first."),
+    .record(fieldValueSchema)
+    .describe(
+      "Flat map of fieldName → value. Primitives for most types. For collectionReference " +
+        "fields, pass the slug of the target item (string). For multiCollectionReference " +
+        "fields, pass an array of slugs. Call framer_describe_collection first.",
+    ),
 });
 
 export function registerCreateItems(server: McpServer): void {
@@ -71,14 +89,14 @@ export function registerCreateItems(server: McpServer): void {
         slug: string;
         fieldData: Record<string, { type: string; value: unknown }>;
       }[] = [];
-      const cache = newAssetCache();
+      const caches = newEncodeCaches();
       try {
         for (const it of items) {
           const fieldData = await encodeFieldData(
             framer,
             cached,
             it.fields as Record<string, PlainFieldValue>,
-            cache,
+            caches,
           );
           encoded.push({ slug: it.slug, fieldData });
         }
