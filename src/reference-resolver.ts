@@ -13,8 +13,10 @@ export class ReferenceResolveError extends Error {
 }
 
 /**
- * Per-call cache of `targetCollectionId → (slug → itemId)` so the same
- * target collection isn't queried twice within a single tool call.
+ * Per-call cache of `targetCollectionId → (slug → itemId)`.
+ *
+ * Scoped to the project alias of the call — cross-project references
+ * are not supported.
  */
 export type ReferenceCache = Map<string, Map<string, string>>;
 
@@ -43,9 +45,9 @@ async function loadSlugIndex(
   return index;
 }
 
-/** Resolve a single slug into an item id within the field's target collection. */
 export async function resolveOne(
   framer: Framer,
+  alias: string,
   field: CachedField,
   slug: string,
   cache: ReferenceCache,
@@ -61,7 +63,7 @@ export async function resolveOne(
   const itemId = index.get(slug);
   if (itemId) return itemId;
 
-  const targetCached = getCollectionById(targetId);
+  const targetCached = getCollectionById(alias, targetId);
   const targetName = targetCached?.name ?? "(unknown)";
   const slugs = [...index.keys()];
   const hint = suggestName(slug, slugs);
@@ -78,23 +80,18 @@ export async function resolveOne(
 
 export async function resolveMany(
   framer: Framer,
+  alias: string,
   field: CachedField,
   slugs: ReadonlyArray<string>,
   cache: ReferenceCache,
 ): Promise<string[]> {
   const out: string[] = [];
   for (const slug of slugs) {
-    out.push(await resolveOne(framer, field, slug, cache));
+    out.push(await resolveOne(framer, alias, field, slug, cache));
   }
   return out;
 }
 
-/**
- * Look up the slug of an item by its id OR by its slug (used when decoding).
- *
- * The Framer SDK sometimes serializes reference values back as slugs rather
- * than ids, so we accept either form.
- */
 export async function lookupSlugById(
   framer: Framer,
   targetCollectionId: string,
@@ -102,9 +99,7 @@ export async function lookupSlugById(
   cache: ReferenceCache,
 ): Promise<string | null> {
   const index = await loadSlugIndex(framer, targetCollectionId, cache);
-  // If the value matches a known slug directly, use it.
   if (index.has(itemIdOrSlug)) return itemIdOrSlug;
-  // Otherwise scan for the id.
   for (const [slug, id] of index.entries()) {
     if (id === itemIdOrSlug) return slug;
   }

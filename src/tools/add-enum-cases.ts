@@ -1,32 +1,33 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getFramer } from "../framer-client.js";
 import { normalizeKey, refreshAll, suggestName } from "../schema-cache.js";
-import { errorResult, jsonResult, resolveCollection } from "./helpers.js";
+import { errorResult, jsonResult, resolveCollection, resolveProject } from "./helpers.js";
 
 export function registerAddEnumCases(server: McpServer): void {
   server.registerTool(
     "framer_add_enum_cases",
     {
       description:
-        "Add new case options to an existing enum field. Use this when a collection has an " +
-        "enum field (like 'Category' or 'Status') and you need to introduce new values. " +
-        "Existing items keep their current values; new cases simply become selectable.",
+        "Add new case options to an existing enum field. Existing items keep their current " +
+        "values; new cases simply become selectable.",
       inputSchema: {
+        project: z.string().optional().describe("Project alias. Required in multi-project mode."),
         collection: z.string().min(1).describe("Collection name."),
         field: z.string().min(1).describe("Enum field name (display name or snake_case key)."),
         cases: z
           .array(z.string().min(1))
           .min(1)
           .max(50)
-          .describe("New case names to add. Existing cases are ignored (no duplicates)."),
+          .describe("New case names to add. Existing cases are skipped."),
       },
     },
-    async ({ collection, field, cases }) => {
-      const framer = await getFramer();
-      await refreshAll(framer);
+    async ({ project, collection, field, cases }) => {
+      const proj = await resolveProject(project);
+      if (!proj.ok) return errorResult(proj.error);
+      const { alias, framer } = proj.ctx;
 
-      const result = resolveCollection(collection, { forWrite: true });
+      await refreshAll(framer, alias);
+      const result = resolveCollection(alias, collection, { forWrite: true });
       if (!result.ok) return errorResult(result.error);
       const cached = result.collection;
 
@@ -41,12 +42,10 @@ export function registerAddEnumCases(server: McpServer): void {
       }
       if (fieldCache.type !== "enum") {
         return errorResult(
-          `Field '${fieldCache.name}' is type '${fieldCache.type}', not 'enum'. ` +
-            `Cannot add enum cases.`,
+          `Field '${fieldCache.name}' is type '${fieldCache.type}', not 'enum'.`,
         );
       }
 
-      // Find the matching live Field instance on the Framer side.
       const framerColl = await framer.getCollection(cached.id);
       if (!framerColl) return errorResult(`Collection '${collection}' disappeared.`);
       const liveFields = await framerColl.getFields();
@@ -74,14 +73,9 @@ export function registerAddEnumCases(server: McpServer): void {
         if (created) added.push(caseName);
       }
 
-      await refreshAll(framer);
+      await refreshAll(framer, alias);
 
-      return jsonResult({
-        collection: cached.name,
-        field: fieldCache.name,
-        added,
-        skipped,
-      });
+      return jsonResult({ collection: cached.name, field: fieldCache.name, added, skipped });
     },
   );
 }

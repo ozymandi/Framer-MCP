@@ -1,6 +1,6 @@
+import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getFramer } from "../framer-client.js";
-import { errorResult, jsonResult } from "./helpers.js";
+import { errorResult, jsonResult, resolveProject } from "./helpers.js";
 
 export function registerPublishAndDeploy(server: McpServer): void {
   server.registerTool(
@@ -8,12 +8,17 @@ export function registerPublishAndDeploy(server: McpServer): void {
     {
       description:
         "Publish the current state of the project and deploy it to production in one step. " +
-        "Run this after you have created, updated, or deleted CMS items and are ready to " +
-        "make them live on the site. Returns the production hostnames.",
-      inputSchema: {},
+        "Run this after you have created, updated, or deleted CMS items and are ready to make " +
+        "them live on the site.",
+      inputSchema: {
+        project: z.string().optional().describe("Project alias. Required in multi-project mode."),
+      },
     },
-    async () => {
-      const framer = await getFramer();
+    async ({ project }) => {
+      const proj = await resolveProject(project);
+      if (!proj.ok) return errorResult(proj.error);
+      const { framer } = proj.ctx;
+
       try {
         const { deployment } = await framer.publish();
         const hostnames = await framer.deploy(deployment.id);

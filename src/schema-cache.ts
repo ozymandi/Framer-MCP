@@ -41,22 +41,30 @@ export interface CachedCollection {
   id: string;
   name: string;
   managedBy: "user" | "thisPlugin" | "anotherPlugin";
-  /** Normalized field name (or key) → field. */
   fieldsByName: Map<string, CachedField>;
-  /** Field id → field. */
   fieldsById: Map<string, CachedField>;
-  /** Ordered for `describe` output. */
   orderedFields: CachedField[];
 }
 
-const collectionsByName = new Map<string, CachedCollection>();
-const collectionsById = new Map<string, CachedCollection>();
+interface ProjectCache {
+  byName: Map<string, CachedCollection>;
+  byId: Map<string, CachedCollection>;
+}
+
+const cachesByAlias = new Map<string, ProjectCache>();
+
+function getOrCreate(alias: string): ProjectCache {
+  let c = cachesByAlias.get(alias);
+  if (!c) {
+    c = { byName: new Map(), byId: new Map() };
+    cachesByAlias.set(alias, c);
+  }
+  return c;
+}
 
 /**
  * Normalize a user-supplied identifier so we can match leniently.
  * Strips ASCII whitespace, dashes, underscores; lower-cases the rest.
- * Examples that all match the same field:
- *   "Author Name", "author name", "author_name", "author-name", "AuthorName"
  */
 export function normalizeKey(input: string): string {
   return input.toLowerCase().replace(/[\s_-]+/g, "");
@@ -73,19 +81,20 @@ export function toSnakeCase(input: string): string {
     .toLowerCase();
 }
 
-export function clearCache(): void {
-  collectionsByName.clear();
-  collectionsById.clear();
+export function clearCache(alias: string): void {
+  cachesByAlias.delete(alias);
 }
 
-export async function refreshAll(framer: Framer): Promise<void> {
-  clearCache();
+export async function refreshAll(framer: Framer, alias: string): Promise<void> {
+  const cache = getOrCreate(alias);
+  cache.byName.clear();
+  cache.byId.clear();
   const collections = await framer.getCollections();
   for (const collection of collections) {
     const fields = await collection.getFields();
     const cached = buildCachedCollection(collection, fields);
-    collectionsByName.set(normalizeKey(cached.name), cached);
-    collectionsById.set(cached.id, cached);
+    cache.byName.set(normalizeKey(cached.name), cached);
+    cache.byId.set(cached.id, cached);
   }
 }
 
@@ -123,8 +132,6 @@ function buildCachedCollection(
     ) {
       cached.referenceTargetCollectionId = raw.collectionId;
     }
-    // Index by both the display name and the snake_case key so either form
-    // resolves to the same field.
     fieldsByName.set(normalizeKey(raw.name), cached);
     fieldsByName.set(normalizeKey(cached.key), cached);
     fieldsById.set(raw.id, cached);
@@ -141,16 +148,24 @@ function buildCachedCollection(
   };
 }
 
-export function getCollectionByName(name: string): CachedCollection | undefined {
-  return collectionsByName.get(normalizeKey(name));
+export function getCollectionByName(
+  alias: string,
+  name: string,
+): CachedCollection | undefined {
+  return cachesByAlias.get(alias)?.byName.get(normalizeKey(name));
 }
 
-export function getCollectionById(id: string): CachedCollection | undefined {
-  return collectionsById.get(id);
+export function getCollectionById(
+  alias: string,
+  id: string,
+): CachedCollection | undefined {
+  return cachesByAlias.get(alias)?.byId.get(id);
 }
 
-export function listCollections(): CachedCollection[] {
-  return [...new Set(collectionsByName.values())];
+export function listCollections(alias: string): CachedCollection[] {
+  const c = cachesByAlias.get(alias);
+  if (!c) return [];
+  return [...new Set(c.byName.values())];
 }
 
 /** Levenshtein-ish: returns top suggestion if reasonably close. */

@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CollectionItemInput } from "framer-api";
-import { getFramer } from "../framer-client.js";
 import { refreshAll } from "../schema-cache.js";
 import {
   encodeFieldData,
@@ -9,7 +8,7 @@ import {
   newEncodeCaches,
   type PlainFieldValue,
 } from "../field-encoder.js";
-import { errorResult, jsonResult, resolveCollection } from "./helpers.js";
+import { errorResult, jsonResult, resolveCollection, resolveProject } from "./helpers.js";
 
 const fieldValueSchema = z.union([
   z.string(),
@@ -25,8 +24,7 @@ const itemSchema = z.object({
     .record(fieldValueSchema)
     .describe(
       "Only the fields you want to change. Other fields stay untouched. " +
-        "For collectionReference fields, pass a slug (string). For multiCollectionReference, " +
-        "an array of slugs.",
+        "For collectionReference, pass a slug. For multiCollectionReference, an array of slugs.",
     ),
 });
 
@@ -35,19 +33,21 @@ export function registerUpdateItems(server: McpServer): void {
     "framer_update_items",
     {
       description:
-        "Update one or more existing items in a collection, identified by slug. " +
-        "Pass only the fields you want to change. " +
-        "Returns the slugs that were updated and any slugs that could not be found.",
+        "Update one or more existing items in a collection, identified by slug. Pass only the " +
+        "fields you want to change.",
       inputSchema: {
+        project: z.string().optional().describe("Project alias. Required in multi-project mode."),
         collection: z.string().min(1).describe("Collection name."),
         items: z.array(itemSchema).min(1).max(200),
       },
     },
-    async ({ collection, items }) => {
-      const framer = await getFramer();
-      await refreshAll(framer);
+    async ({ project, collection, items }) => {
+      const proj = await resolveProject(project);
+      if (!proj.ok) return errorResult(proj.error);
+      const { alias, framer } = proj.ctx;
 
-      const result = resolveCollection(collection, { forWrite: true });
+      await refreshAll(framer, alias);
+      const result = resolveCollection(alias, collection, { forWrite: true });
       if (!result.ok) return errorResult(result.error);
       const cached = result.collection;
 
@@ -75,6 +75,7 @@ export function registerUpdateItems(server: McpServer): void {
           }
           const fieldData = await encodeFieldData(
             framer,
+            alias,
             cached,
             it.fields as Record<string, PlainFieldValue>,
             caches,
@@ -88,10 +89,7 @@ export function registerUpdateItems(server: McpServer): void {
 
       if (toUpsert.length > 0) await framerColl.addItems(toUpsert as unknown as CollectionItemInput[]);
 
-      return jsonResult({
-        updated: toUpsert.map((t) => t.slug),
-        notFound,
-      });
+      return jsonResult({ updated: toUpsert.map((t) => t.slug), notFound });
     },
   );
 }

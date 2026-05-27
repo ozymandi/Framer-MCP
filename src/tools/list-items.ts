@@ -1,40 +1,31 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getFramer } from "../framer-client.js";
 import { refreshAll } from "../schema-cache.js";
 import { decodeFieldData, newEncodeCaches } from "../field-encoder.js";
-import { errorResult, jsonResult, resolveCollection } from "./helpers.js";
+import { errorResult, jsonResult, resolveCollection, resolveProject } from "./helpers.js";
 
 export function registerListItems(server: McpServer): void {
   server.registerTool(
     "framer_list_items",
     {
       description:
-        "List items in a collection. Returns an array of { slug, draft, fields } where " +
-        "`fields` is a flat map of fieldName → value (server resolves IDs and enum cases). " +
-        "Supports pagination with limit + offset.",
+        "List items in a collection. Returns { slug, draft, fields } where `fields` is a " +
+        "flat map of fieldName → value (server resolves IDs and enum cases). Supports " +
+        "pagination via limit + offset.",
       inputSchema: {
+        project: z.string().optional().describe("Project alias. Required in multi-project mode."),
         collection: z.string().min(1).describe("Collection name."),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(500)
-          .optional()
-          .describe("Max items to return. Default 50."),
-        offset: z
-          .number()
-          .int()
-          .min(0)
-          .optional()
-          .describe("Items to skip from the start. Default 0."),
+        limit: z.number().int().min(1).max(500).optional().describe("Max items. Default 50."),
+        offset: z.number().int().min(0).optional().describe("Items to skip. Default 0."),
       },
     },
-    async ({ collection, limit, offset }) => {
-      const framer = await getFramer();
-      await refreshAll(framer);
+    async ({ project, collection, limit, offset }) => {
+      const proj = await resolveProject(project);
+      if (!proj.ok) return errorResult(proj.error);
+      const { alias, framer } = proj.ctx;
 
-      const result = resolveCollection(collection, { forWrite: false });
+      await refreshAll(framer, alias);
+      const result = resolveCollection(alias, collection, { forWrite: false });
       if (!result.ok) return errorResult(result.error);
       const cached = result.collection;
 
@@ -54,6 +45,7 @@ export function registerListItems(server: McpServer): void {
           draft: item.draft,
           fields: await decodeFieldData(
             framer,
+            alias,
             cached,
             item.fieldData as Record<string, { type: string; value: unknown } | undefined>,
             caches,

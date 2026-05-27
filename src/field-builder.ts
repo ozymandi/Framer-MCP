@@ -1,5 +1,5 @@
 import type { CreateField } from "framer-api";
-import { getCollectionByName, suggestName, listCollections } from "./schema-cache.js";
+import { getCollectionByName, listCollections, suggestName } from "./schema-cache.js";
 
 /**
  * Client-friendly field definition. Server maps to Framer's CreateField union.
@@ -48,7 +48,10 @@ const RECOGNIZED_TYPES = new Set([
  * Translate a list of friendly field definitions into Framer's CreateField shape.
  * Throws FieldBuildError with helpful messages.
  */
-export function buildCreateFields(defs: ReadonlyArray<FriendlyFieldDef>): CreateField[] {
+export function buildCreateFields(
+  alias: string,
+  defs: ReadonlyArray<FriendlyFieldDef>,
+): CreateField[] {
   const out: CreateField[] = [];
   const seenNames = new Set<string>();
   for (const def of defs) {
@@ -126,9 +129,9 @@ export function buildCreateFields(defs: ReadonlyArray<FriendlyFieldDef>): Create
           `Field '${def.name}' (${type}): provide the target collection via 'referenceCollection'.`,
         );
       }
-      const target = getCollectionByName(def.referenceCollection);
+      const target = getCollectionByName(alias, def.referenceCollection);
       if (!target) {
-        const known = listCollections().map((c) => c.name);
+        const known = listCollections(alias).map((c) => c.name);
         const hint = suggestName(def.referenceCollection, known);
         throw new FieldBuildError(
           `Field '${def.name}': referenceCollection '${def.referenceCollection}' not found.` +

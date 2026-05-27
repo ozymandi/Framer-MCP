@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { config } from "./config.js";
-import { disconnectFramer } from "./framer-client.js";
+import { disconnectAll } from "./framer-client.js";
 import { registerAllTools } from "./tools/index.js";
 
 const SESSION_HEADER = "mcp-session-id";
@@ -53,7 +53,7 @@ async function bootstrapStdio(): Promise<void> {
     } catch {
       // ignore
     }
-    await disconnectFramer();
+    await disconnectAll();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
@@ -115,7 +115,7 @@ async function bootstrapHttp(): Promise<void> {
   });
 
   fastify.addHook("onClose", async () => {
-    await disconnectFramer();
+    await disconnectAll();
     for (const { transport } of sessions.values()) {
       await transport.close();
     }
@@ -124,7 +124,7 @@ async function bootstrapHttp(): Promise<void> {
 
   const shutdown = async () => {
     await fastify.close();
-    await disconnectFramer();
+    await disconnectAll();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

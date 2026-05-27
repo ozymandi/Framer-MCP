@@ -1,8 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getFramer } from "../framer-client.js";
 import { normalizeKey, refreshAll, suggestName } from "../schema-cache.js";
-import { errorResult, jsonResult, resolveCollection } from "./helpers.js";
+import { errorResult, jsonResult, resolveCollection, resolveProject } from "./helpers.js";
 
 export function registerRemoveFields(server: McpServer): void {
   server.registerTool(
@@ -10,9 +9,9 @@ export function registerRemoveFields(server: McpServer): void {
     {
       description:
         "Remove one or more fields from an existing collection by name. " +
-        "WARNING: this drops any data stored in those fields across every item. " +
-        "Only call this when you genuinely want to delete the column from the schema.",
+        "WARNING: this drops any data stored in those fields across every item.",
       inputSchema: {
+        project: z.string().optional().describe("Project alias. Required in multi-project mode."),
         collection: z.string().min(1).describe("Collection name."),
         fieldNames: z
           .array(z.string().min(1))
@@ -21,11 +20,13 @@ export function registerRemoveFields(server: McpServer): void {
           .describe("Names of fields to remove (display name or snake_case key)."),
       },
     },
-    async ({ collection, fieldNames }) => {
-      const framer = await getFramer();
-      await refreshAll(framer);
+    async ({ project, collection, fieldNames }) => {
+      const proj = await resolveProject(project);
+      if (!proj.ok) return errorResult(proj.error);
+      const { alias, framer } = proj.ctx;
 
-      const result = resolveCollection(collection, { forWrite: true });
+      await refreshAll(framer, alias);
+      const result = resolveCollection(alias, collection, { forWrite: true });
       if (!result.ok) return errorResult(result.error);
       const cached = result.collection;
 
@@ -47,8 +48,7 @@ export function registerRemoveFields(server: McpServer): void {
 
       if (notFound.length > 0) {
         const lines = notFound.map(
-          (n) =>
-            `'${n.name}' not found` + (n.hint ? ` (did you mean '${n.hint}'?)` : ""),
+          (n) => `'${n.name}' not found` + (n.hint ? ` (did you mean '${n.hint}'?)` : ""),
         );
         return errorResult(
           `Some fields could not be resolved: ${lines.join("; ")}. ` +
@@ -60,12 +60,9 @@ export function registerRemoveFields(server: McpServer): void {
       if (!framerColl) return errorResult(`Collection '${collection}' disappeared.`);
       await framerColl.removeFields(toRemoveIds);
 
-      await refreshAll(framer);
+      await refreshAll(framer, alias);
 
-      return jsonResult({
-        collection: cached.name,
-        removed: removedNames,
-      });
+      return jsonResult({ collection: cached.name, removed: removedNames });
     },
   );
 }

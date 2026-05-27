@@ -16,12 +16,6 @@ import {
   type ReferenceCache,
 } from "./reference-resolver.js";
 
-/**
- * Plain JSON value the client may send for a field.
- * Server wraps it into Framer's typed FieldDataEntry shape.
- *
- * `string[]` is accepted only for multiCollectionReference (array of slugs).
- */
 export type PlainFieldValue = string | number | boolean | null | string[];
 
 export class FieldEncodeError extends Error {
@@ -31,7 +25,6 @@ export class FieldEncodeError extends Error {
   }
 }
 
-/** Field types we accept from plain values. */
 const WRITABLE: ReadonlyArray<CachedField["type"]> = [
   "string",
   "formattedText",
@@ -56,18 +49,9 @@ export function newEncodeCaches(): EncodeCaches {
   return { assets: newAssetCache(), references: newReferenceCache() };
 }
 
-/**
- * Convert `{ fieldName: plainValue }` into Framer's
- * `{ [fieldId]: { type, value } }` form.
- *
- * - Image/file fields auto-upload URLs and data URLs.
- * - Reference fields auto-resolve slugs to item ids.
- *
- * Throws FieldEncodeError, AssetUploadError, or ReferenceResolveError with
- * model-friendly messages.
- */
 export async function encodeFieldData(
   framer: Framer,
+  alias: string,
   collection: CachedCollection,
   fields: Record<string, PlainFieldValue>,
   caches: EncodeCaches = newEncodeCaches(),
@@ -90,13 +74,14 @@ export async function encodeFieldData(
           `Writable types: ${WRITABLE.join(", ")}.`,
       );
     }
-    out[field.id] = await encodeOne(framer, field, rawValue, caches);
+    out[field.id] = await encodeOne(framer, alias, field, rawValue, caches);
   }
   return out;
 }
 
 async function encodeOne(
   framer: Framer,
+  alias: string,
   field: CachedField,
   value: PlainFieldValue,
   caches: EncodeCaches,
@@ -198,7 +183,7 @@ async function encodeOne(
         );
       }
       try {
-        const id = await resolveOne(framer, field, value, caches.references);
+        const id = await resolveOne(framer, alias, field, value, caches.references);
         return { type: "collectionReference", value: id };
       } catch (err) {
         if (err instanceof ReferenceResolveError) {
@@ -221,7 +206,7 @@ async function encodeOne(
         }
       }
       try {
-        const ids = await resolveMany(framer, field, value, caches.references);
+        const ids = await resolveMany(framer, alias, field, value, caches.references);
         return { type: "multiCollectionReference", value: ids };
       } catch (err) {
         if (err instanceof ReferenceResolveError) {
@@ -243,14 +228,9 @@ function describe(v: unknown): string {
   return typeof v;
 }
 
-/**
- * Decode Framer's stored FieldData back into a flat map of `fieldName → plainValue`.
- *
- * For reference fields, returns `{ slug, collection }` (or arrays thereof).
- * Asynchronous because reference decoding requires a live lookup.
- */
 export async function decodeFieldData(
   framer: Framer,
+  alias: string,
   collection: CachedCollection,
   fieldData: Record<string, { type: string; value: unknown } | undefined>,
   caches: EncodeCaches = newEncodeCaches(),
@@ -259,13 +239,14 @@ export async function decodeFieldData(
   for (const field of collection.orderedFields) {
     if (field.type === "divider" || field.type === "unsupported") continue;
     const entry = fieldData[field.id];
-    out[field.name] = entry ? await decodeEntry(framer, field, entry, caches) : null;
+    out[field.name] = entry ? await decodeEntry(framer, alias, field, entry, caches) : null;
   }
   return out;
 }
 
 async function decodeEntry(
   framer: Framer,
+  alias: string,
   field: CachedField,
   entry: { type: string; value: unknown },
   caches: EncodeCaches,
@@ -292,13 +273,13 @@ async function decodeEntry(
       const targetId = field.referenceTargetCollectionId;
       if (!targetId) return v;
       const slug = await lookupSlugById(framer, targetId, v, caches.references);
-      const collectionName = getCollectionById(targetId)?.name ?? null;
+      const collectionName = getCollectionById(alias, targetId)?.name ?? null;
       return slug ? { slug, collection: collectionName } : { itemId: v, collection: collectionName };
     }
     case "multiCollectionReference": {
       const targetId = field.referenceTargetCollectionId;
       if (!targetId || !Array.isArray(v)) return v;
-      const collectionName = getCollectionById(targetId)?.name ?? null;
+      const collectionName = getCollectionById(alias, targetId)?.name ?? null;
       const out: unknown[] = [];
       for (const id of v) {
         if (typeof id !== "string") {

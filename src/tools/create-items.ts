@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CollectionItemInput } from "framer-api";
-import { getFramer } from "../framer-client.js";
 import { refreshAll } from "../schema-cache.js";
 import {
   encodeFieldData,
@@ -9,7 +8,7 @@ import {
   newEncodeCaches,
   type PlainFieldValue,
 } from "../field-encoder.js";
-import { errorResult, jsonResult, resolveCollection } from "./helpers.js";
+import { errorResult, jsonResult, resolveCollection, resolveProject } from "./helpers.js";
 
 const WRITABLE_TYPES = new Set([
   "string",
@@ -35,18 +34,12 @@ const fieldValueSchema = z.union([
 ]);
 
 const itemSchema = z.object({
-  slug: z
-    .string()
-    .min(1)
-    .describe(
-      "URL-safe unique identifier within the collection (e.g. 'getting-started').",
-    ),
+  slug: z.string().min(1).describe("URL-safe unique identifier (e.g. 'getting-started')."),
   fields: z
     .record(fieldValueSchema)
     .describe(
-      "Flat map of fieldName → value. Primitives for most types. For collectionReference " +
-        "fields, pass the slug of the target item (string). For multiCollectionReference " +
-        "fields, pass an array of slugs. Call framer_describe_collection first.",
+      "Flat map of fieldName → value. Primitives for most types. For collectionReference, " +
+        "pass the slug of the target item. For multiCollectionReference, pass an array of slugs.",
     ),
 });
 
@@ -55,25 +48,23 @@ export function registerCreateItems(server: McpServer): void {
     "framer_create_items",
     {
       description:
-        "Create COMPLETE items in a collection. Aim to populate every writable field — " +
-        "partial items look broken when published (missing dates, images, author info, body text). " +
-        "Call framer_describe_collection first to learn the full schema; fill every field marked " +
-        "recommended:true unless you genuinely have nothing for it. " +
-        "Field values are plain primitives (string, number, boolean, null). " +
-        "Image and file fields accept a public URL, a data URL, or an asset id — the server uploads " +
-        "URLs automatically. Slugs must be unique; duplicate slugs within the same call are rejected. " +
-        "After this call returns, review the per-item completeness report and use framer_update_items " +
-        "to fill in any empty fields.",
+        "Create COMPLETE items in a collection. Aim to populate every writable field — partial " +
+        "items look broken when published. Call framer_describe_collection first. Image and file " +
+        "fields accept a public URL, a data URL, or an asset id — the server uploads URLs " +
+        "automatically. After this call, review the per-item completeness report.",
       inputSchema: {
+        project: z.string().optional().describe("Project alias. Required in multi-project mode."),
         collection: z.string().min(1).describe("Collection name."),
         items: z.array(itemSchema).min(1).max(200),
       },
     },
-    async ({ collection, items }) => {
-      const framer = await getFramer();
-      await refreshAll(framer);
+    async ({ project, collection, items }) => {
+      const proj = await resolveProject(project);
+      if (!proj.ok) return errorResult(proj.error);
+      const { alias, framer } = proj.ctx;
 
-      const result = resolveCollection(collection, { forWrite: true });
+      await refreshAll(framer, alias);
+      const result = resolveCollection(alias, collection, { forWrite: true });
       if (!result.ok) return errorResult(result.error);
       const cached = result.collection;
 
@@ -94,6 +85,7 @@ export function registerCreateItems(server: McpServer): void {
         for (const it of items) {
           const fieldData = await encodeFieldData(
             framer,
+            alias,
             cached,
             it.fields as Record<string, PlainFieldValue>,
             caches,
@@ -109,7 +101,6 @@ export function registerCreateItems(server: McpServer): void {
       if (!framerColl) return errorResult(`Collection '${collection}' disappeared.`);
       await framerColl.addItems(encoded as unknown as CollectionItemInput[]);
 
-      // Per-item completeness report — sharp nudge for small models.
       const writableFields = cached.orderedFields.filter((f) => WRITABLE_TYPES.has(f.type));
       const totalWritable = writableFields.length;
 
@@ -118,14 +109,9 @@ export function registerCreateItems(server: McpServer): void {
       for (const item of encoded) {
         const filledIds = new Set(Object.keys(item.fieldData));
         const filledCount = writableFields.filter((f) => filledIds.has(f.id)).length;
-        const emptyNames = writableFields
-          .filter((f) => !filledIds.has(f.id))
-          .map((f) => f.name);
+        const emptyNames = writableFields.filter((f) => !filledIds.has(f.id)).map((f) => f.name);
         if (emptyNames.length > 0) anyEmpty = true;
-        const tail =
-          emptyNames.length === 0
-            ? "complete"
-            : `empty: ${emptyNames.join(", ")}`;
+        const tail = emptyNames.length === 0 ? "complete" : `empty: ${emptyNames.join(", ")}`;
         perItemReports.push(`  ${item.slug}: ${filledCount}/${totalWritable} fields filled — ${tail}`);
       }
 
@@ -143,8 +129,6 @@ export function registerCreateItems(server: McpServer): void {
         );
       }
 
-      // Return both a human-readable text and a structured JSON tail so a more
-      // capable client can parse, while small models read the text.
       return {
         content: [
           { type: "text" as const, text: lines.join("\n") },

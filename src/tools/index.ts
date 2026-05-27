@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerListProjects } from "./list-projects.js";
 import { registerStatus } from "./status.js";
 import { registerListCollections } from "./list-collections.js";
 import { registerDescribeCollection } from "./describe-collection.js";
@@ -15,6 +16,7 @@ import { registerRemoveFields } from "./remove-fields.js";
 import { registerAddEnumCases } from "./add-enum-cases.js";
 
 export function registerAllTools(server: McpServer): void {
+  registerListProjects(server);
   registerStatus(server);
   registerListCollections(server);
   registerDescribeCollection(server);
