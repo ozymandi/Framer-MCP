@@ -13,7 +13,7 @@ generator; this server is the writer.
 
 - One Framer project per server instance, configured via env.
 - HTTP transport (streamable HTTP), Bearer auth.
-- Ten tools, all designed for small-model usability:
+- Fourteen tools, all designed for small-model usability:
   - `framer_status`
   - `framer_list_collections`
   - `framer_describe_collection`
@@ -23,6 +23,10 @@ generator; this server is the writer.
   - `framer_delete_items`
   - `framer_upload_image`
   - `framer_upload_file`
+  - `framer_create_collection`
+  - `framer_add_fields`
+  - `framer_remove_fields`
+  - `framer_add_enum_cases`
   - `framer_publish_and_deploy`
 - Operates on existing user-created collections. No schema editing in v1.
 - All identifiers (collection ids, field ids) hidden from the client. The
@@ -35,8 +39,9 @@ generator; this server is the writer.
 
 ## Out of scope — v1
 
-- `collectionReference` / `multiCollectionReference` fields in writes.
-- Creating collections / adding fields from MCP.
+- Deleting collections (Framer SDK does not expose this).
+- Renaming or reordering fields (not yet — possible future iteration).
+- `framer_remove_enum_case` (destructive against items already using it).
 - An `expert` mode exposing thin 1:1 SDK primitives.
 - Multi-project routing in a single server.
 

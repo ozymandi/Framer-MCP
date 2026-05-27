@@ -9,6 +9,10 @@ import { registerDeleteItems } from "./delete-items.js";
 import { registerPublishAndDeploy } from "./publish.js";
 import { registerUploadImage } from "./upload-image.js";
 import { registerUploadFile } from "./upload-file.js";
+import { registerCreateCollection } from "./create-collection.js";
+import { registerAddFields } from "./add-fields.js";
+import { registerRemoveFields } from "./remove-fields.js";
+import { registerAddEnumCases } from "./add-enum-cases.js";
 
 export function registerAllTools(server: McpServer): void {
   registerStatus(server);
@@ -20,5 +24,9 @@ export function registerAllTools(server: McpServer): void {
   registerDeleteItems(server);
   registerUploadImage(server);
   registerUploadFile(server);
+  registerCreateCollection(server);
+  registerAddFields(server);
+  registerRemoveFields(server);
+  registerAddEnumCases(server);
   registerPublishAndDeploy(server);
 }
