@@ -1,5 +1,5 @@
 import type { CachedCollection, CachedField } from "./schema-cache.js";
-import { suggestName } from "./schema-cache.js";
+import { normalizeKey, suggestName } from "./schema-cache.js";
 import type { Framer } from "./framer-client.js";
 import {
   AssetUploadError,
@@ -52,7 +52,7 @@ export async function encodeFieldData(
   const out: Record<string, { type: string; value: unknown; alt?: string }> = {};
 
   for (const [rawName, rawValue] of Object.entries(fields)) {
-    const field = collection.fieldsByName.get(rawName.toLowerCase());
+    const field = collection.fieldsByName.get(normalizeKey(rawName));
     if (!field) {
       const known = [...collection.fieldsByName.values()].map((f) => f.name);
       const hint = suggestName(rawName, known);
@@ -140,7 +140,7 @@ async function encodeOne(
       if (!cases || cases.size === 0) {
         throw new FieldEncodeError(`Field '${field.name}' has no enum cases defined.`);
       }
-      const byName = cases.get(value.toLowerCase());
+      const byName = cases.get(normalizeKey(value));
       if (byName) return { type: "enum", value: byName.id };
       const byId = [...cases.values()].find((c) => c.id === value);
       if (byId) return { type: "enum", value: byId.id };

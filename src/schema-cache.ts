@@ -25,9 +25,12 @@ export interface CachedEnumCase {
 export interface CachedField {
   id: string;
   name: string;
+  /** snake_case form of `name`, useful as an alternative key for clients that
+   * struggle with spaces in JSON keys. */
+  key: string;
   type: FieldType;
   required: boolean;
-  /** Only for type === "enum". Lower-cased case-name → case id. */
+  /** Only for type === "enum". Normalized case-name → case. */
   enumCases?: Map<string, CachedEnumCase>;
 }
 
@@ -35,7 +38,7 @@ export interface CachedCollection {
   id: string;
   name: string;
   managedBy: "user" | "thisPlugin" | "anotherPlugin";
-  /** Lower-cased field name → field. */
+  /** Normalized field name (or key) → field. */
   fieldsByName: Map<string, CachedField>;
   /** Field id → field. */
   fieldsById: Map<string, CachedField>;
@@ -44,6 +47,27 @@ export interface CachedCollection {
 }
 
 const collectionsByName = new Map<string, CachedCollection>();
+
+/**
+ * Normalize a user-supplied identifier so we can match leniently.
+ * Strips ASCII whitespace, dashes, underscores; lower-cases the rest.
+ * Examples that all match the same field:
+ *   "Author Name", "author name", "author_name", "author-name", "AuthorName"
+ */
+export function normalizeKey(input: string): string {
+  return input.toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+/** Convert a display name into snake_case (best-effort, for use as `key`). */
+export function toSnakeCase(input: string): string {
+  return input
+    .replace(/[?!.,:;'"`()]/g, "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/-+/g, "_")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
 
 export function clearCache(): void {
   collectionsByName.clear();
@@ -55,13 +79,19 @@ export async function refreshAll(framer: Framer): Promise<void> {
   for (const collection of collections) {
     const fields = await collection.getFields();
     const cached = buildCachedCollection(collection, fields);
-    collectionsByName.set(cached.name.toLowerCase(), cached);
+    collectionsByName.set(normalizeKey(cached.name), cached);
   }
 }
 
 function buildCachedCollection(
   collection: { id: string; name: string; managedBy: "user" | "thisPlugin" | "anotherPlugin" },
-  fields: ReadonlyArray<{ id: string; name: string; type: string; required?: boolean; cases?: ReadonlyArray<{ id: string; name: string }> }>,
+  fields: ReadonlyArray<{
+    id: string;
+    name: string;
+    type: string;
+    required?: boolean;
+    cases?: ReadonlyArray<{ id: string; name: string }>;
+  }>,
 ): CachedCollection {
   const fieldsByName = new Map<string, CachedField>();
   const fieldsById = new Map<string, CachedField>();
@@ -71,15 +101,19 @@ function buildCachedCollection(
     const cached: CachedField = {
       id: raw.id,
       name: raw.name,
+      key: toSnakeCase(raw.name),
       type: raw.type as FieldType,
       required: Boolean(raw.required),
     };
     if (raw.type === "enum" && Array.isArray(raw.cases)) {
       const map = new Map<string, CachedEnumCase>();
-      for (const c of raw.cases) map.set(c.name.toLowerCase(), { id: c.id, name: c.name });
+      for (const c of raw.cases) map.set(normalizeKey(c.name), { id: c.id, name: c.name });
       cached.enumCases = map;
     }
-    fieldsByName.set(raw.name.toLowerCase(), cached);
+    // Index by both the display name and the snake_case key so either form
+    // resolves to the same field.
+    fieldsByName.set(normalizeKey(raw.name), cached);
+    fieldsByName.set(normalizeKey(cached.key), cached);
     fieldsById.set(raw.id, cached);
     orderedFields.push(cached);
   }
@@ -95,19 +129,19 @@ function buildCachedCollection(
 }
 
 export function getCollectionByName(name: string): CachedCollection | undefined {
-  return collectionsByName.get(name.toLowerCase());
+  return collectionsByName.get(normalizeKey(name));
 }
 
 export function listCollections(): CachedCollection[] {
-  return [...collectionsByName.values()];
+  return [...new Set(collectionsByName.values())];
 }
 
 /** Levenshtein-ish: returns top suggestion if reasonably close. */
 export function suggestName(target: string, candidates: Iterable<string>): string | null {
-  const t = target.toLowerCase();
+  const t = normalizeKey(target);
   let best: { name: string; score: number } | null = null;
   for (const name of candidates) {
-    const score = distance(t, name.toLowerCase());
+    const score = distance(t, normalizeKey(name));
     if (best === null || score < best.score) best = { name, score };
   }
   if (!best) return null;

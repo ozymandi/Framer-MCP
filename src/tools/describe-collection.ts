@@ -48,6 +48,7 @@ export function registerDescribeCollection(server: McpServer): void {
           const writable = WRITABLE_TYPES.has(f.type);
           return {
             name: f.name,
+            key: f.key,
             type: f.type,
             required: f.required,
             recommended: writable,
@@ -61,7 +62,10 @@ export function registerDescribeCollection(server: McpServer): void {
           "not only the required ones. Optional fields left empty will leave the published item " +
           "visibly incomplete (missing dates, images, author info, body text, etc.). " +
           "If you genuinely have no content for a recommended field, that is fine, but do not " +
-          "skip a field just because it is not required.",
+          "skip a field just because it is not required. " +
+          "When writing, you may use EITHER the human-readable `name` (e.g. \"Author Name\") OR " +
+          "the snake_case `key` (e.g. \"author_name\") as the field key in the `fields` object — " +
+          "the server matches both, case-insensitively, ignoring spaces/dashes/underscores.",
         name: c.name,
         writable: c.managedBy !== "anotherPlugin",
         fields,
